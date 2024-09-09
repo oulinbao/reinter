@@ -16,14 +16,14 @@ package intersection
 
 import (
 	"fmt"
+	"log"
+	"regexp"
+
 	"github.com/oulinbao/regexinter/dfa"
 	"github.com/oulinbao/regexinter/nfa"
 	"github.com/oulinbao/regexinter/runerange"
-	"log"
-	"regexp"
+	"github.com/pkg/errors"
 )
-
-var nodeMap map[string]*CombineNode
 
 type CombineNode struct {
 	Name        string // state1_state2
@@ -38,28 +38,32 @@ type T struct {
 	Node       *CombineNode // node
 }
 
-func HasIntersection(expr1, expr2 string) bool {
-	node1, node2 := convert2Dfa(expr1), convert2Dfa(expr2)
-	if node1.Final && node2.Final {
-		return true
+func HasIntersection(expr1, expr2 string) (bool, error) {
+	node2, err2 := convert2Dfa(expr2)
+	if nil != err2 {
+		return false, err2
 	}
 
-	nodeMap = make(map[string]*CombineNode)
+	node1, err1 := convert2Dfa(expr1)
+	if nil != err1 {
+		return false, err1
+	}
+
+	var nodeMap = make(map[string]*CombineNode)
 	firstNode := createNode(node1, node2)
-	return dfs(firstNode)
+	return dfs(firstNode, nodeMap), nil
 }
 
-func convert2Dfa(expr string) *dfa.Node {
+func convert2Dfa(expr string) (*dfa.Node, error) {
 	_, err := regexp.Compile(expr)
 	if err != nil {
-		log.Fatal(fmt.Sprintf("invalid regexp: %q", expr))
+		return nil, errors.Wrap(err, fmt.Sprintf("invalid regexp: %s", expr))
 	}
 
 	nfaNode, err := nfa.New(expr)
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	return dfa.NewFromNFA(nfaNode)
 }
 
@@ -72,50 +76,97 @@ func createNode(node1, node2 *dfa.Node) *CombineNode {
 	}
 }
 
-func dfs(node *CombineNode) bool {
-	ranges := findOverlapRanges(node.Node1.Transitions, node.Node2.Transitions)
+func dfs(startNode *CombineNode, nodeMap map[string]*CombineNode) bool {
+	stack := []*CombineNode{startNode}
+	visited := make(map[string]bool)
 
-	for _, r := range ranges {
-		nextNode1 := node.Node1.NextState(r)
-		nextNode2 := node.Node2.NextState(r)
-		node, ok := nodeMap[nodeName(nextNode1, nextNode2)]
-		if !ok {
-			node = createNode(nextNode1, nextNode2)
-			nodeMap[nodeName(nextNode1, nextNode2)] = node
-		} else {
-			// point to the same node, should ignore
+	for len(stack) > 0 {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		name := nodeName(node.Node1, node.Node2)
+
+		if visited[name] {
 			continue
 		}
-
-		// expend new node
-		node.Transitions = append(node.Transitions, T{r, node})
+		visited[name] = true
+		nodeMap[name] = node
 
 		if node.Final {
 			return true
 		}
 
-		// recursive
-		return dfs(node)
+		ranges := findOverlapRanges(node.Node1.Transitions, node.Node2.Transitions)
+
+		for _, r := range ranges {
+			nextNodes1 := findNextNodes(node.Node1, r.Range)
+			nextNodes2 := findNextNodes(node.Node2, r.Range)
+
+			for _, next1 := range nextNodes1 {
+				for _, next2 := range nextNodes2 {
+					tmpNode := createNode(next1, next2)
+					tmpName := nodeName(next1, next2)
+					if !visited[tmpName] {
+						stack = append(stack, tmpNode)
+					}
+				}
+			}
+		}
 	}
 
 	return false
 }
 
-func findOverlapRanges(trans1, trans2 []dfa.T) [][]rune {
-	result := make([][]rune, 0)
+func findNextNodes(node *dfa.Node, r []rune) []*dfa.Node {
+	var nextNodes []*dfa.Node
+	for _, t := range node.Transitions {
+		if runerange.Overlaps(t.RuneRanges, r) {
+			nextNodes = append(nextNodes, t.Node)
+		}
+	}
+	return nextNodes
+}
 
+type RangeInfo struct {
+	Range []rune
+	Node1 *dfa.Node
+	Node2 *dfa.Node
+}
+
+func findOverlapRanges(trans1, trans2 []dfa.T) []RangeInfo {
+	var result []RangeInfo
 	for _, t1 := range trans1 {
 		for _, t2 := range trans2 {
-			if runerange.Contains(t1.RuneRanges, t2.RuneRanges) {
-				result = append(result, t2.RuneRanges)
-			}
-
-			if runerange.Contains(t2.RuneRanges, t1.RuneRanges) {
-				result = append(result, t1.RuneRanges)
+			if runerange.Overlaps(t1.RuneRanges, t2.RuneRanges) {
+				overlap := findOverlap(t1.RuneRanges, t2.RuneRanges)
+				result = append(result, RangeInfo{
+					Range: overlap,
+					Node1: t1.Node,
+					Node2: t2.Node,
+				})
 			}
 		}
 	}
+	return result
+}
 
+func findOverlap(range1, range2 []rune) []rune {
+	var result []rune
+	i, j := 0, 0
+	for i < len(range1) && j < len(range2) {
+		start := max(range1[i], range2[j])
+		end := min(range1[i+1], range2[j+1])
+
+		if start <= end {
+			result = append(result, start, end)
+		}
+
+		if range1[i+1] < range2[j+1] {
+			i += 2
+		} else {
+			j += 2
+		}
+	}
 	return result
 }
 

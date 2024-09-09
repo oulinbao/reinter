@@ -37,6 +37,6 @@ EXAMPLE: regexinter "a+b" "a*b"`)
 		os.Exit(1)
 	}
 
-	result := intersection.HasIntersection(flag.Arg(0), flag.Arg(1))
+	result, _ := intersection.HasIntersection(flag.Arg(0), flag.Arg(1))
 	fmt.Println(result)
 }
