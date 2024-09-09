@@ -34,16 +34,18 @@ func In(ranges []rune, r rune) bool {
 	return false
 }
 
-// Contains returns true if the range a contains the range b.
 func Contains(a, b []rune) bool {
-outer:
 	for i := 0; i < len(b); i += 2 {
+		contained := false
 		for j := 0; j < len(a); j += 2 {
-			if b[i] >= a[j] && b[i+1] <= a[j+1] {
-				continue outer
+			if (b[i] >= a[j] && b[i+1] <= a[j+1]) || (a[j] >= b[i] && a[j+1] <= b[i+1]) {
+				contained = true
+				break
 			}
 		}
-		return false
+		if !contained {
+			return false
+		}
 	}
 	return true
 }
@@ -226,4 +228,15 @@ outer:
 	}
 	sort.Sort(pairs(result))
 	return result
+}
+
+func Overlaps(a, b []rune) bool {
+	for i := 0; i < len(a); i += 2 {
+		for j := 0; j < len(b); j += 2 {
+			if (a[i] <= b[j+1] && a[i+1] >= b[j]) || (b[j] <= a[i+1] && b[j+1] >= a[i]) {
+				return true
+			}
+		}
+	}
+	return false
 }

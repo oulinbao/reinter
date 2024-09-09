@@ -135,12 +135,13 @@ func recursiveNewFromRegexp(r *syntax.Regexp, ctx *context) (begin *Node, end *N
 	case syntax.OpLiteral:
 		begin = ctx.node()
 		cur := begin
-		for _, r := range r.Rune {
+		for i := range r.Rune {
 			end = ctx.node()
+			sub := r.Rune[i]
 			if caseInsensitive {
-				cur.T = append(cur.T, T{R: runerange.Fold([]rune{r, r}), N: end})
+				cur.T = append(cur.T, T{R: runerange.Fold([]rune{sub, sub}), N: end})
 			} else {
-				cur.T = append(cur.T, T{R: []rune{r, r}, N: end})
+				cur.T = append(cur.T, T{R: []rune{sub, sub}, N: end})
 			}
 			cur = end
 		}
@@ -263,9 +264,9 @@ func recursiveNewFromRegexp(r *syntax.Regexp, ctx *context) (begin *Node, end *N
 
 	case syntax.OpConcat:
 		var cur *Node
-		for _, r := range r.Sub {
+		for i := range r.Sub {
 			var b *Node
-			b, end = recursiveNewFromRegexp(r, ctx)
+			b, end = recursiveNewFromRegexp(r.Sub[i], ctx)
 			if begin == nil {
 				begin = b
 			}
@@ -278,8 +279,9 @@ func recursiveNewFromRegexp(r *syntax.Regexp, ctx *context) (begin *Node, end *N
 	case syntax.OpAlternate:
 		begin = ctx.node()
 		end = ctx.node()
-		for _, r := range r.Sub {
-			b, e := recursiveNewFromRegexp(r, ctx)
+		for i, _ := range r.Sub {
+			sub := r.Sub[i]
+			b, e := recursiveNewFromRegexp(sub, ctx)
 			begin.T = append(begin.T, T{N: b})
 			e.T = append(e.T, T{N: end})
 		}

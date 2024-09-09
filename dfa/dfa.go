@@ -47,7 +47,7 @@ type context struct {
 var visited = make(map[*Node]bool)
 
 func (n Node) Print() {
-	fmt.Println(fmt.Sprintf("State: %d, Final: %v, Trans: %v", n.State, n.Final, n.Transitions))
+	fmt.Println(fmt.Sprintf("Lable:%s, State: %d, Final: %v, Trans: %v", n.label, n.State, n.Final, n.Transitions))
 
 	for _, t := range n.Transitions {
 		if _, exist := visited[t.Node]; exist {
@@ -55,7 +55,8 @@ func (n Node) Print() {
 		}
 
 		visited[t.Node] = true
-		fmt.Println("rune ranges", t.RuneRanges)
+		fmt.Println(fmt.Sprintf("Trans: %v,rune ranges %v", t, t.RuneRanges))
+
 		t.Node.Print()
 	}
 }
@@ -70,38 +71,27 @@ func (n Node) NextState(r []rune) *Node {
 	return nil
 }
 
-func NewFromNFA(nfanode *nfa.Node) *Node {
+func NewFromNFA(nfanode *nfa.Node) (*Node, error) {
 	ctx := &context{
 		nodesByLabel: make(map[string]*Node),
 		closureCache: make(map[*nfa.Node][]*nfa.Node),
 	}
 	node := firstNode(nfanode, ctx)
 	constructSubset(node, ctx)
-	return node
+	return node, nil
 }
 
-func recursiveClosure(node *nfa.Node, visited map[*nfa.Node]struct{}) []*nfa.Node {
-	if visited != nil {
-		if _, ok := visited[node]; ok {
-			return nil
-		}
+func recursiveClosure(node *nfa.Node, visited map[*nfa.Node]bool) []*nfa.Node {
+	if visited[node] {
+		return nil
 	}
+	visited[node] = true
 
 	cls := []*nfa.Node{node}
 	for _, t := range node.T {
-		if t.R == nil {
-			if visited == nil {
-				visited = make(map[*nfa.Node]struct{})
-				visited[node] = struct{}{}
-			}
-			if c := recursiveClosure(t.N, visited); c != nil {
-				cls = append(cls, c...)
-			}
+		if t.R == nil { // ε-transition
+			cls = append(cls, recursiveClosure(t.N, visited)...)
 		}
-	}
-
-	if visited != nil {
-		delete(visited, node)
 	}
 
 	return cls
@@ -114,7 +104,8 @@ func closure(node *nfa.Node, cache map[*nfa.Node][]*nfa.Node) []*nfa.Node {
 		}
 	}
 
-	cls := recursiveClosure(node, nil)
+	visited := make(map[*nfa.Node]bool)
+	cls := recursiveClosure(node, visited)
 
 	if cache != nil {
 		cache[node] = cls
@@ -152,9 +143,28 @@ func labelFromClosure(cls []*nfa.Node) string {
 }
 
 func isFinal(cls []*nfa.Node) bool {
+	visited := make(map[*nfa.Node]bool)
 	for _, n := range cls {
-		if n.F {
+		if canReachFinal(n, visited) {
 			return true
+		}
+	}
+	return false
+}
+
+func canReachFinal(node *nfa.Node, visited map[*nfa.Node]bool) bool {
+	if node.F {
+		return true
+	}
+	if visited[node] {
+		return false
+	}
+	visited[node] = true
+	for _, t := range node.T {
+		if t.R == nil { // 空转换
+			if canReachFinal(t.N, visited) {
+				return true
+			}
 		}
 	}
 	return false
@@ -186,8 +196,9 @@ func union(cls ...[]*nfa.Node) []*nfa.Node {
 }
 
 func closuresForRange(n *Node, rr []rune, ctx *context) (closures [][]*nfa.Node) {
-	for _, n := range n.closures {
-		for _, t := range n.T {
+	for i := range n.closures {
+		c := n.closures[i]
+		for _, t := range c.T {
 			if runerange.Contains(t.R, rr) {
 				cls := closure(t.N, ctx.closureCache)
 				closures = append(closures, cls)
@@ -199,7 +210,8 @@ func closuresForRange(n *Node, rr []rune, ctx *context) (closures [][]*nfa.Node)
 
 func constructSubset(root *Node, ctx *context) {
 	var ranges [][]rune
-	for _, n := range root.closures {
+	for i := range root.closures {
+		n := root.closures[i]
 		for _, t := range n.T {
 			ranges = append(ranges, t.R)
 		}
@@ -210,8 +222,8 @@ func constructSubset(root *Node, ctx *context) {
 
 	for i := 0; i < len(pairs); i += 2 {
 		cls := union(closuresForRange(root, pairs[i:i+2], ctx)...)
-
 		label := labelFromClosure(cls)
+		isFinalState := isFinal(cls)
 		var node *Node
 		if n, ok := ctx.nodesByLabel[label]; ok {
 			node = n
@@ -219,20 +231,38 @@ func constructSubset(root *Node, ctx *context) {
 			ctx.state++
 			node = &Node{
 				State:    ctx.state,
-				Final:    isFinal(cls),
+				Final:    isFinalState,
 				label:    label,
 				closures: cls,
 			}
 			ctx.nodesByLabel[label] = node
 			constructSubset(node, ctx)
 		}
-
 		m[node] = runerange.Sum(m[node], pairs[i:i+2])
 	}
 
-	for n, rr := range m {
-		root.Transitions = append(root.Transitions, T{rr, n})
+	type transition struct {
+		node  *Node
+		runes []rune
 	}
+	var transitions []transition
+	for n, rr := range m {
+		transitions = append(transitions, transition{n, rr})
+	}
+	if len(m) > 0 {
+		sort.Slice(transitions, func(i, j int) bool {
+			if len(transitions[i].node.closures) > 0 && len(transitions[j].node.closures) > 0 {
+				return transitions[i].node.closures[0].S < transitions[j].node.closures[0].S
+			} else {
+				return transitions[i].node.State < transitions[j].node.State
+			}
+
+		})
+		for _, t := range transitions {
+			root.Transitions = append(root.Transitions, T{t.runes, t.node})
+		}
+	}
+
 }
 
 func firstNode(nfanode *nfa.Node, ctx *context) *Node {
